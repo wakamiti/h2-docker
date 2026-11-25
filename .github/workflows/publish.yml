@@ -1,0 +1,85 @@
+name: publish
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # weekly (Mondays): detect new H2 releases
+  workflow_dispatch:
+
+env:
+  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/h2
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      missing: ${{ steps.plan.outputs.missing }}
+      latest: ${{ steps.plan.outputs.latest }}
+    steps:
+      - id: plan
+        run: |
+          # All stable 2.x versions on Maven Central, oldest first
+          all=$(curl -sf https://repo1.maven.org/maven2/com/h2database/h2/maven-metadata.xml \
+            | grep -o '<version>[^<]*' | sed 's/<version>//' | grep -E '^2\.[0-9]+\.[0-9]+$' | sort -V)
+          # Tags already on Docker Hub
+          url="https://hub.docker.com/v2/repositories/$IMAGE/tags?page_size=100"; existing=""
+          while [ -n "$url" ] && [ "$url" != null ]; do
+            page=$(curl -s "$url") || break
+            existing="$existing $(echo "$page" | jq -r '.results[]?.name')"
+            url=$(echo "$page" | jq -r '.next // empty')
+          done
+          missing=$(for v in $all; do echo "$existing" | tr ' ' '\n' | grep -qx "$v" || echo "$v"; done | jq -R . | jq -sc .)
+          echo "missing=$missing" >> "$GITHUB_OUTPUT"
+          echo "latest=$(echo "$all" | tail -1)" >> "$GITHUB_OUTPUT"
+          echo "Missing versions: $missing"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.missing != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.plan.outputs.missing) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Smoke test (amd64)
+        run: scripts/build-test.sh "${{ matrix.version }}"
+      - name: Build and push (amd64 + arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          build-args: H2_VERSION=${{ matrix.version }}
+          tags: ${{ env.IMAGE }}:${{ matrix.version }}
+          push: true
+
+  latest:
+    needs: [plan, build]
+    # Run when nothing was missing (build skipped) or every build succeeded
+    if: ${{ !cancelled() && needs.build.result != 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Point latest at the newest version
+        run: |
+          docker buildx imagetools create \
+            -t "$IMAGE:latest" "$IMAGE:${{ needs.plan.outputs.latest }}"
+      - name: Update Docker Hub description from README.md
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}   # token needs Read, Write & Delete scope
+          repository: ${{ env.IMAGE }}
+          short-description: Unofficial H2 database server
+          readme-filepath: README.md

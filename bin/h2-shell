@@ -1,0 +1,5 @@
+#!/bin/sh
+# H2 SQL shell against the local server. Defaults can be set with H2_URL / H2_USER / H2_PASSWORD
+# or overridden by passing -url / -user / -password (later options win). Extra args go to org.h2.tools.Shell.
+exec /opt/jre/bin/java -cp /opt/h2.jar org.h2.tools.Shell \
+  -url "${H2_URL:-jdbc:h2:tcp://localhost:9092/mydb}" -user "${H2_USER:-sa}" -password "${H2_PASSWORD:-}" "$@"

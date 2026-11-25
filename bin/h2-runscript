@@ -1,0 +1,10 @@
+#!/bin/sh
+# Runs a SQL script against the local server. Same defaults as h2-shell.
+# Reads stdin unless you pass -script. Usage: h2-runscript [-showResults] < script.sql
+#                                          h2-runscript -script /data/file.sql
+case " $* " in *" -script "*) ;; *)
+  # older H2 versions seek in the file, which a pipe cannot do: spool stdin first
+  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; cat > "$tmp"; set -- -script "$tmp" "$@" ;;
+esac
+/opt/jre/bin/java -cp /opt/h2.jar org.h2.tools.RunScript \
+  -url "${H2_URL:-jdbc:h2:tcp://localhost:9092/mydb}" -user "${H2_USER:-sa}" -password "${H2_PASSWORD:-}" "$@"

@@ -2,7 +2,7 @@ name: publish
 
 on:
   schedule:
-    - cron: '0 6 * * 1'   # weekly (Mondays): detect new H2 releases
+    - cron: '0 6 1 * *'   # monthly: detect new H2 releases
   workflow_dispatch:
 
 env:
